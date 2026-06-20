@@ -26,6 +26,12 @@ exports.getSettings = async (req, res) => {
             ],
             submitButtonText: 'Confirm Booking',
             gstOption: 'full'
+          },
+          inquiryPopup: {
+            enabled: true,
+            delay: 12,
+            title: "Plan Your Next Trip",
+            description: "Connect with our destination experts"
           }
         } 
       });
