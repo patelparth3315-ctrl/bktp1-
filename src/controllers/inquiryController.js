@@ -60,10 +60,15 @@ exports.getInquiries = async (req, res, next) => {
       orderBy: { createdAt: 'desc' }
     });
 
+    const mappedInquiries = inquiries.map(inq => ({
+      ...inq,
+      read: inq.status !== 'new'
+    }));
+
     res.json({
       success: true,
-      count: inquiries.length,
-      data: inquiries
+      count: mappedInquiries.length,
+      data: mappedInquiries
     });
   } catch (error) {
     next(error);
@@ -105,7 +110,13 @@ exports.getInquiry = async (req, res, next) => {
       where: { id: req.params.id, tenantId: req.user.tenantId }
     });
     if (!inquiry) return res.status(404).json({ success: false, message: 'Inquiry not found' });
-    res.json({ success: true, data: inquiry });
+    
+    const mappedInquiry = {
+      ...inquiry,
+      read: inquiry.status !== 'new'
+    };
+
+    res.json({ success: true, data: mappedInquiry });
   } catch (error) {
     next(error);
   }

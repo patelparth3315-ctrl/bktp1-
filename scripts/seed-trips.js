@@ -15,12 +15,31 @@ function guessLocation(title) {
   return 'India'
 }
 
+function cleanDuplicateString(str) {
+  if (typeof str !== 'string') return str;
+  str = str.trim();
+  const len = str.length;
+  if (len >= 6 && len % 2 === 0) {
+    const half = len / 2;
+    const firstHalf = str.substring(0, half);
+    const secondHalf = str.substring(half);
+    if (firstHalf === secondHalf) {
+      return firstHalf;
+    }
+  }
+  return str;
+}
+
 async function seed() {
   const dataPath = path.join(__dirname, 'trips-data.json');
   if (!fs.existsSync(dataPath)) {
     console.error('❌ Could not find trips-data.json');
     return;
   }
+
+  // Clear existing trips
+  await prisma.trip.deleteMany({});
+  console.log('🧹 Cleared existing trips from database.');
 
   const trips = JSON.parse(fs.readFileSync(dataPath))
   console.log(`🌱 Seeding ${trips.length} detailed trips...`)
@@ -30,6 +49,18 @@ async function seed() {
       const slug = t.url.split('/tours/')[1] || t.title.toLowerCase().replace(/[^a-z0-9]/g, '-');
       const location = guessLocation(t.title);
       const price = parseFloat(t.price.replace(/[^0-9.]/g, '')) || 0;
+
+      // Clean availableDates if present
+      let cleanAvailableDates = null;
+      if (t.availableDates && Array.isArray(t.availableDates)) {
+        cleanAvailableDates = t.availableDates.map(d => {
+          const cleanD = {};
+          for (const [key, val] of Object.entries(d)) {
+            cleanD[key] = typeof val === 'string' ? cleanDuplicateString(val) : val;
+          }
+          return cleanD;
+        });
+      }
 
       const tripData = {
         title: t.title,
@@ -41,7 +72,7 @@ async function seed() {
         itinerary: t.itinerary,
         inclusions: t.inclusions,
         exclusions: t.exclusions,
-        availableDates: t.availableDates,
+        availableDates: cleanAvailableDates,
         isActive: true,
         status: 'published'
       };
@@ -69,3 +100,4 @@ seed().catch(async (e) => {
   await prisma.$disconnect()
   process.exit(1)
 })
+
