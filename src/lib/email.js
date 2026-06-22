@@ -192,6 +192,7 @@ const templates = {
     const gstRate = 0.05;
     const calculatedGst = Math.round((basePrice - gstDiscount) * gstRate);
     const totalWithGst = basePrice - gstDiscount + calculatedGst;
+    const remainingBalance = Math.max(0, totalWithGst - Number(booking.advancePaid));
 
     priceRowsHtml += `
       <tr style="border-bottom: 1px solid #e2e8f0; font-size: 13px;">
@@ -393,16 +394,16 @@ const templates = {
                 ₹ ${Number(booking.advancePaid).toLocaleString('en-IN')}
               </td>
             </tr>
+            <tr style="background-color: #fffbeb; font-size: 14px; border-top: 1px solid #fcd34d;">
+              <td style="padding: 12px 10px; color: #b45309; text-align: left; font-weight: 700;">
+                Remaining Balance
+              </td>
+              <td style="padding: 12px 10px; color: #b45309; font-weight: 700; text-align: right; white-space: nowrap;">
+                ₹ ${Number(remainingBalance).toLocaleString('en-IN')}
+              </td>
+            </tr>
           </tbody>
         </table>
-
-        <!-- Balance Notice -->
-        <p style="font-size: 12px; color: #dc2626; font-weight: 700; margin: 0 0 8px 0; line-height: 1.4;">
-          Please note: You have balance payment of ₹ ${Number(booking.remainingAmount).toLocaleString('en-IN')}, please make the payment as per the booking.
-        </p>
-        <p style="font-size: 11px; color: #64748b; margin: 0;">
-          Advance booking amount is non-refundable. <a href="https://youthcamping.online/terms" style="color: #3b82f6; text-decoration: underline;">Terms and Conditions</a>
-        </p>
       </div>
 
       <!-- Divider -->
