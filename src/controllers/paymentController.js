@@ -1,4 +1,5 @@
 const { prisma } = require('../lib/prisma');
+const { logAction } = require('../utils/auditLogger');
 
 /**
  * Recalculates paidAmount and status based on Prisma
@@ -47,6 +48,11 @@ exports.addPayment = async (req, res, next) => {
     });
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
+    // Sales ownership check
+    if (req.user?.role === 'sales' && booking.salesAdminId !== req.user.id) {
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+    }
+
     const payment = await prisma.payment.create({
       data: {
         bookingId,
@@ -57,6 +63,16 @@ exports.addPayment = async (req, res, next) => {
     });
 
     await syncBookingFromPayments(bookingId, tenantId);
+
+    await logAction({
+      tenantId,
+      actorUserId: req.user.id,
+      action: 'payment_update',
+      entityType: 'payment',
+      entityId: payment.id,
+      afterData: payment,
+      ipAddress: req.ip || null
+    });
 
     res.status(201).json({ success: true, data: payment });
   } catch (error) {
@@ -72,6 +88,15 @@ exports.addPayment = async (req, res, next) => {
 exports.getPaymentsByBooking = async (req, res, next) => {
   try {
     const tenantId = req.user.tenantId;
+    const booking = await prisma.booking.findFirst({
+      where: { id: req.params.bookingId, tenantId }
+    });
+    if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+    
+    if (req.user?.role === 'sales' && booking.salesAdminId !== req.user.id) {
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+    }
+
     const payments = await prisma.payment.findMany({
       where: { bookingId: req.params.bookingId, tenantId },
       orderBy: { createdAt: 'desc' }
@@ -82,14 +107,26 @@ exports.getPaymentsByBooking = async (req, res, next) => {
     next(error);
   }
 };
+
 /**
  * @desc    Get all payments (tenantId scoped)
  * @route   GET /api/payments
  */
 exports.getAllPayments = async (req, res, next) => {
   try {
+    const where = { tenantId: req.user.tenantId };
+    
+    if (req.user?.role === 'sales') {
+      const salesBookings = await prisma.booking.findMany({
+        where: { salesAdminId: req.user.id, tenantId: req.user.tenantId },
+        select: { id: true }
+      });
+      const bookingIds = salesBookings.map(b => b.id);
+      where.bookingId = { in: bookingIds };
+    }
+
     const payments = await prisma.payment.findMany({
-      where: { tenantId: req.user.tenantId },
+      where,
       orderBy: { createdAt: 'desc' }
     });
     res.json({ success: true, data: payments });
@@ -110,11 +147,29 @@ exports.deletePayment = async (req, res, next) => {
     });
     if (!payment) return res.status(404).json({ success: false, message: 'Payment not found' });
 
+    // Validate ownership before delete
+    const booking = await prisma.booking.findFirst({
+      where: { id: payment.bookingId, tenantId }
+    });
+    if (booking && req.user?.role === 'sales' && booking.salesAdminId !== req.user.id) {
+      return res.status(404).json({ success: false, message: 'Payment not found' });
+    }
+
     await prisma.payment.delete({
       where: { id: req.params.id }
     });
 
     await syncBookingFromPayments(payment.bookingId, tenantId);
+
+    await logAction({
+      tenantId,
+      actorUserId: req.user.id,
+      action: 'payment_delete',
+      entityType: 'payment',
+      entityId: req.params.id,
+      beforeData: payment,
+      ipAddress: req.ip || null
+    });
 
     res.json({ success: true, message: 'Payment deleted and booking synced' });
   } catch (error) {

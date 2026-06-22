@@ -1,6 +1,7 @@
 const { prisma } = require('../lib/prisma');
 const { syncBookingToSheets } = require('../utils/googleSheetsSync');
 const crypto = require('crypto');
+const { logAction } = require('../utils/auditLogger');
 
 // Helper to safely parse dates and avoid crashes with "Invalid Date"
 const safeParseDate = (dateVal) => {
@@ -31,6 +32,20 @@ exports.getBookings = async (req, res, next) => {
     // Role-based constraint: sales can only see bookings sourced from their own salesAdminId.
     if (req.user?.role === 'sales') {
       where.salesAdminId = req.user.id;
+    } else if (req.user?.role === 'guide') {
+      const assignments = await prisma.tripAssignment.findMany({
+        where: { guideId: req.user.id }
+      });
+      const assignedTripIds = assignments.map(a => a.tripId);
+      if (tripId) {
+        if (assignedTripIds.includes(tripId)) {
+          where.tripId = tripId;
+        } else {
+          where.tripId = 'none';
+        }
+      } else {
+        where.tripId = { in: assignedTripIds };
+      }
     } else if (salesAdminId) {
       where.salesAdminId = salesAdminId;
     }
@@ -284,7 +299,7 @@ exports.createBooking = async (req, res, next) => {
             persons: req.body.passengers || [],
           },
           sourceBookingLinkId: sourceLink ? sourceLink.id : null,
-          salesAdminId: sourceLink ? sourceLink.createdByAdminId : null,
+          salesAdminId: sourceLink ? sourceLink.createdByAdminId : (req.user ? (req.user.role === 'sales' ? req.user.id : req.body.salesAdminId || null) : null),
           sourceMeta: sourceLink
             ? {
                 tripId: sourceLink.tripId,
@@ -353,6 +368,11 @@ exports.updateBooking = async (req, res, next) => {
         foodPreference: req.body.foodPreference !== undefined ? req.body.foodPreference : currentPassengers.details.foodPreference,
         mealPreference: req.body.mealPreference !== undefined ? req.body.mealPreference : currentPassengers.details.mealPreference,
         dietary: req.body.dietary !== undefined ? req.body.dietary : currentPassengers.details.dietary,
+        roomAllocation: req.body.roomAllocation !== undefined ? req.body.roomAllocation : currentPassengers.details.roomAllocation,
+        guideAssignment: req.body.guideAssignment !== undefined ? req.body.guideAssignment : currentPassengers.details.guideAssignment,
+        pickupStatus: req.body.pickupStatus !== undefined ? req.body.pickupStatus : currentPassengers.details.pickupStatus,
+        travelStatus: req.body.travelStatus !== undefined ? req.body.travelStatus : currentPassengers.details.travelStatus,
+        participantNotes: req.body.participantNotes !== undefined ? req.body.participantNotes : currentPassengers.details.participantNotes,
       },
       persons: updateData.passengers !== undefined ? updateData.passengers : currentPassengers.persons
     };
@@ -363,6 +383,12 @@ exports.updateBooking = async (req, res, next) => {
     delete updateData.foodPreference;
     delete updateData.mealPreference;
     delete updateData.dietary;
+    delete updateData.roomAllocation;
+    delete updateData.guideAssignment;
+    delete updateData.pickupStatus;
+    delete updateData.travelStatus;
+    delete updateData.participantNotes;
+    
     if (updateData.basePrice !== undefined) {
       updateData.baseAmount = updateData.basePrice !== null ? parseFloat(updateData.basePrice) : null;
       delete updateData.basePrice;
@@ -406,8 +432,33 @@ exports.updateBooking = async (req, res, next) => {
       where.salesAdminId = req.user.id;
     }
 
+    const beforeBooking = await prisma.booking.findFirst({ where });
+    if (!beforeBooking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
     const booking = await prisma.booking.updateMany({ where, data: updateData });
-    if (booking.count === 0) return res.status(404).json({ success: false, message: 'Booking not found' });
+    
+    // Log audit log
+    const isReassignment = updateData.salesAdminId !== undefined && updateData.salesAdminId !== beforeBooking.salesAdminId;
+    const isPriceGstChange = (updateData.baseAmount !== undefined && updateData.baseAmount !== beforeBooking.baseAmount) ||
+                             (updateData.gstAmount !== undefined && updateData.gstAmount !== beforeBooking.gstAmount);
+    const isPaymentUpdate = (updateData.paymentStatus !== undefined && updateData.paymentStatus !== beforeBooking.paymentStatus);
+
+    let logActionType = 'booking_update';
+    if (isReassignment) logActionType = 'sales_ownership_reassignment';
+    else if (isPriceGstChange) logActionType = 'price_gst_change';
+    else if (isPaymentUpdate) logActionType = 'payment_update';
+
+    await logAction({
+      tenantId: req.user.tenantId,
+      actorUserId: req.user.id,
+      action: logActionType,
+      entityType: 'booking',
+      entityId: req.params.id,
+      beforeData: beforeBooking,
+      afterData: updateData,
+      ipAddress: req.ip || null
+    });
+
     res.json({ success: true, message: 'Booking updated' });
   } catch (error) { next(error); }
 };
@@ -424,7 +475,6 @@ exports.deleteBooking = async (req, res, next) => {
 
     const booking = await prisma.booking.findFirst({
       where,
-      select: { id: true },
     });
     if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
 
@@ -436,6 +486,17 @@ exports.deleteBooking = async (req, res, next) => {
         status: 'cancelled',
         paymentStatus: 'Cancelled',
       },
+    });
+
+    await logAction({
+      tenantId,
+      actorUserId: req.user.id,
+      action: 'booking_rejection',
+      entityType: 'booking',
+      entityId: id,
+      beforeData: booking,
+      afterData: { status: 'cancelled', paymentStatus: 'Cancelled' },
+      ipAddress: req.ip || null
     });
 
     res.json({ success: true, message: 'Booking cancelled successfully' });
@@ -461,19 +522,34 @@ exports.confirmBooking = async (req, res, next) => {
       where.salesAdminId = req.user.id;
     }
 
+    const beforeBooking = await prisma.booking.findFirst({ where });
+    if (!beforeBooking) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+    const updatePayload = {
+      status: 'confirmed', 
+      totalAmount: Number(totalAmount),
+      advancePaid: targetAdvance,
+      remainingAmount: Number(totalAmount) - targetAdvance,
+      paymentMode, 
+      paymentStatus,
+      email: email || undefined
+    };
+
     const booking = await prisma.booking.updateMany({
       where,
-      data: {
-        status: 'confirmed', 
-        totalAmount: Number(totalAmount),
-        advancePaid: targetAdvance,
-        remainingAmount: Number(totalAmount) - targetAdvance,
-        paymentMode, 
-        paymentStatus,
-        email: email || undefined
-      }
+      data: updatePayload
     });
-    if (booking.count === 0) return res.status(404).json({ success: false, message: 'Booking not found' });
+
+    await logAction({
+      tenantId: req.user.tenantId,
+      actorUserId: req.user.id,
+      action: 'booking_approval',
+      entityType: 'booking',
+      entityId: req.params.id,
+      beforeData: beforeBooking,
+      afterData: updatePayload,
+      ipAddress: req.ip || null
+    });
 
     if (targetAdvance > 0) {
       const existingPayment = await prisma.payment.findFirst({
@@ -794,6 +870,17 @@ exports.confirmPayment = async (req, res, next) => {
       }
     });
 
+    await logAction({
+      tenantId,
+      actorUserId: req.user.id,
+      action: 'payment_update',
+      entityType: 'booking',
+      entityId: id,
+      beforeData: booking,
+      afterData: { payment_status: 'confirmed', paymentStatus: 'Paid' },
+      ipAddress: req.ip || null
+    });
+
     // Sync to Google Sheets
     syncBookingToSheets(updatedBooking).catch(err => console.error('[SHEETS_SYNC_SILENT_ERR]', err.message));
 
@@ -824,6 +911,17 @@ exports.updateBookingUpi = async (req, res, next) => {
         payment_status: 'pending',
         payment_method: 'upi'
       }
+    });
+
+    await logAction({
+      tenantId: booking.tenantId || 'default',
+      actorUserId: req.user?.id || null,
+      action: 'payment_update',
+      entityType: 'booking',
+      entityId: booking.id,
+      beforeData: booking,
+      afterData: { upi_reference, payment_status: 'pending', payment_method: 'upi' },
+      ipAddress: req.ip || null
     });
 
     // Sync to Google Sheets

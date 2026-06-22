@@ -8,8 +8,7 @@ const {
   deleteHeroVideo,
   toggleHeroVideo
 } = require('../controllers/settingsController');
-const { protect } = require('../middleware/auth');
-const requireRole = require('../middleware/role');
+const { authenticate, requirePermission } = require('../middleware/auth');
 const multer = require('multer');
 const path = require('path');
 
@@ -31,12 +30,12 @@ const uploadVideo = multer({
 });
 
 router.get('/', getSettings);
-router.put('/', protect, requireRole('admin'), updateSettings);
-router.get('/draft', protect, requireRole('admin'), getDraftSettings);
+router.put('/', authenticate, requirePermission('settings.edit'), updateSettings);
+router.get('/draft', authenticate, requirePermission('settings.view'), getDraftSettings);
 
 // Hero Video management routes
-router.post('/hero-video', protect, requireRole('admin'), uploadVideo.single('video'), uploadHeroVideo);
-router.delete('/hero-video', protect, requireRole('admin'), deleteHeroVideo);
-router.patch('/hero-video/toggle', protect, requireRole('admin'), toggleHeroVideo);
+router.post('/hero-video', authenticate, requirePermission('settings.edit'), uploadVideo.single('video'), uploadHeroVideo);
+router.delete('/hero-video', authenticate, requirePermission('settings.edit'), deleteHeroVideo);
+router.patch('/hero-video/toggle', authenticate, requirePermission('settings.edit'), toggleHeroVideo);
 
 module.exports = router;

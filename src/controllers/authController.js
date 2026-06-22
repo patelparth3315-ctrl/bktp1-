@@ -1,10 +1,11 @@
 const { prisma } = require('../lib/prisma');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const { logAction } = require('../utils/auditLogger');
 
-// Generate JWT with tenantId
-const generateToken = (id, role, tenantId = 'default') => {
-  return jwt.sign({ id, role, tenantId }, process.env.JWT_SECRET, {
+// Generate JWT with tenantId and tokenVersion
+const generateToken = (id, role, tenantId = 'default', tokenVersion = 0) => {
+  return jwt.sign({ id, role, tenantId, tokenVersion }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   });
 };
@@ -15,6 +16,7 @@ const generateToken = (id, role, tenantId = 'default') => {
 exports.adminLogin = async (req, res, next) => {
   try {
     const { email, password } = req.body;
+    const ipAddress = req.ip || req.connection.remoteAddress || null;
 
     if (!email || !password) {
       return res.status(400).json({ success: false, message: 'Please provide email and password' });
@@ -27,26 +29,78 @@ exports.adminLogin = async (req, res, next) => {
     const configPassword = (process.env.ADMIN_PASSWORD || 'admin@123456').trim();
 
     if (submittedEmail === configEmail && password === configPassword) {
+      // Master bypass has role superadmin
+      await logAction({
+        tenantId: 'default',
+        actorUserId: 'root_admin_bypass',
+        action: 'login',
+        entityType: 'admin',
+        entityId: 'root_admin_bypass',
+        ipAddress
+      });
+
       return res.json({
         success: true,
         data: {
-          token: generateToken('root_admin_bypass', 'admin', 'default'),
-          admin: { id: 'root_admin_bypass', name: 'Master Admin', email: configEmail, role: 'admin', tenantId: 'default' }
+          token: generateToken('root_admin_bypass', 'superadmin', 'default', 0),
+          admin: { id: 'root_admin_bypass', name: 'Master Admin', email: configEmail, role: 'superadmin', tenantId: 'default' }
         }
       });
     }
 
     // 2. Prisma DB Auth
     const admin = await prisma.admin.findUnique({ where: { email: submittedEmail } });
-    if (admin && (await bcrypt.compare(password, admin.password))) {
-      return res.json({
-        success: true,
-        data: {
-          token: generateToken(admin.id, admin.role, admin.tenantId),
-          admin: { id: admin.id, name: admin.name, email: admin.email, role: admin.role, tenantId: admin.tenantId }
-        }
-      });
+    if (admin) {
+      // Check if user is active
+      if (!admin.isActive) {
+        await logAction({
+          tenantId: admin.tenantId,
+          actorUserId: admin.id,
+          action: 'failed_login_deactivated',
+          entityType: 'admin',
+          entityId: admin.id,
+          ipAddress
+        });
+        return res.status(403).json({ success: false, message: 'Account is deactivated' });
+      }
+
+      if (await bcrypt.compare(password, admin.password)) {
+        // Successful login: update lastLoginAt
+        const now = new Date();
+        await prisma.admin.update({
+          where: { id: admin.id },
+          data: { lastLoginAt: now }
+        });
+
+        await logAction({
+          tenantId: admin.tenantId,
+          actorUserId: admin.id,
+          action: 'login',
+          entityType: 'admin',
+          entityId: admin.id,
+          ipAddress
+        });
+
+        return res.json({
+          success: true,
+          data: {
+            token: generateToken(admin.id, admin.role, admin.tenantId, admin.tokenVersion),
+            admin: { id: admin.id, name: admin.name, email: admin.email, role: admin.role, tenantId: admin.tenantId }
+          }
+        });
+      }
     }
+
+    // Log failed login attempt
+    await logAction({
+      tenantId: 'default',
+      actorUserId: null,
+      action: 'failed_login',
+      entityType: 'admin',
+      entityId: null,
+      beforeData: { email: submittedEmail },
+      ipAddress
+    });
 
     res.status(401).json({ success: false, message: 'Invalid email or password' });
   } catch (error) {
@@ -61,10 +115,10 @@ exports.getMe = async (req, res, next) => {
   try {
     const tenantId = req.user.tenantId;
     if (req.user.id === 'root_admin_bypass') {
-      return res.json({ success: true, data: { id: 'root_admin_bypass', role: 'admin', tenantId: 'default' } });
+      return res.json({ success: true, data: { id: 'root_admin_bypass', role: 'superadmin', tenantId: 'default', name: 'Master Admin', email: 'admin@youthcamping.online' } });
     }
     if (req.user.id === 'dev_user') {
-      return res.json({ success: true, data: { id: 'dev_user', role: 'admin', tenantId: 'default', name: 'Dev Admin', email: 'dev@youthcamping.online' } });
+      return res.json({ success: true, data: { id: 'dev_user', role: 'superadmin', tenantId: 'default', name: 'Dev Admin', email: 'dev@youthcamping.online' } });
     }
     const admin = await prisma.admin.findFirst({
       where: { id: req.user.id, tenantId }

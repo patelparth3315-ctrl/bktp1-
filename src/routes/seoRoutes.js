@@ -1,13 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const { getSeo, updateSeo, getSitemap, getRobots } = require('../controllers/seoController');
-const { protect } = require('../middleware/auth');
-const requireRole = require('../middleware/role');
+const { authenticate, requirePermission } = require('../middleware/auth');
 
 router.get('/sitemap.xml', getSitemap);
 router.get('/robots.txt', getRobots);
 
 router.get('/:page', getSeo);
-router.put('/:page', protect, requireRole('admin'), updateSeo);
+router.put('/:page', authenticate, requirePermission('seo.edit'), updateSeo);
 
 module.exports = router;

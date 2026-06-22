@@ -18,7 +18,13 @@ const {
   confirmPayment,
   updateBookingUpi
 } = require('../controllers/bookingController');
-const { protectAny } = require('../middleware/auth');
+const { 
+  authenticate,
+  requirePermission,
+  enforceOwnership
+} = require('../middleware/auth');
+const { guardBookingUpdateFields } = require('../middleware/fieldGuard');
+const { stripFinancialFieldsForGuides } = require('../middleware/financialStripper');
 const { validate, createBookingSchema } = require('../validators');
 
 // ── PUBLIC (Client Form) ──
@@ -28,21 +34,34 @@ router.get('/my-bookings/search', searchByPhone);
 router.get('/lookup/:bookingId', getBookingPublic);
 
 // ── ADMIN: Trip Management ──
-router.get('/trips', protectAny, getAllTrips);
-router.post('/trips', protectAny, createTrip);
-router.put('/trips/:id', protectAny, updateTrip);
-router.delete('/trips/:id', protectAny, deleteTrip);
+router.get('/trips', authenticate, requirePermission('trips.view'), stripFinancialFieldsForGuides, getAllTrips);
+router.post('/trips', authenticate, requirePermission('trips.create'), createTrip);
+router.put('/trips/:id', authenticate, requirePermission('trips.edit'), enforceOwnership('trip'), updateTrip);
+router.delete('/trips/:id', authenticate, requirePermission('trips.delete'), enforceOwnership('trip'), deleteTrip);
 
 // ── ADMIN: Booking Management ──
-router.get('/', protectAny, getAllBookings);
-// PUBLIC: customer booking submissions (tokenized booking links are validated in controller)
-router.post('/', validate(createBookingSchema), createBooking);
-router.post('/create', validate(createBookingSchema), createBooking);
-router.get('/:id', protectAny, getBookingById);
-router.put('/:id/confirm', protectAny, confirmBooking);
-router.put('/:id', protectAny, updateBooking);
-router.patch('/:id/confirm-payment', protectAny, confirmPayment);
+router.get('/', authenticate, requirePermission('bookings.view'), stripFinancialFieldsForGuides, getAllBookings);
+// PUBLIC: customer booking submissions (can also be created by sales/admin manually)
+router.post('/', (req, res, next) => {
+  // If request has Authorization header, authenticate it first, otherwise bypass
+  if (req.headers.authorization) {
+    return authenticate(req, res, next);
+  }
+  next();
+}, validate(createBookingSchema), createBooking);
+
+router.post('/create', (req, res, next) => {
+  if (req.headers.authorization) {
+    return authenticate(req, res, next);
+  }
+  next();
+}, validate(createBookingSchema), createBooking);
+
+router.get('/:id', authenticate, requirePermission('bookings.view'), enforceOwnership('booking'), stripFinancialFieldsForGuides, getBookingById);
+router.put('/:id/confirm', authenticate, requirePermission('bookings.approve'), enforceOwnership('booking'), confirmBooking);
+router.put('/:id', authenticate, requirePermission('bookings.edit'), enforceOwnership('booking'), guardBookingUpdateFields, updateBooking);
+router.patch('/:id/confirm-payment', authenticate, requirePermission('payments.edit'), enforceOwnership('booking'), confirmPayment);
 router.patch('/:id', updateBookingUpi);
-router.delete('/:id', protectAny, deleteBooking);
+router.delete('/:id', authenticate, requirePermission('bookings.delete'), enforceOwnership('booking'), deleteBooking);
 
 module.exports = router;

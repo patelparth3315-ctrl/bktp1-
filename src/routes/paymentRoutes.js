@@ -6,14 +6,14 @@ const {
   getAllPayments,
   deletePayment
 } = require('../controllers/paymentController');
-const { protect } = require('../middleware/auth');
+const { authenticate, requirePermission } = require('../middleware/auth');
 
-// All payment routes are admin-only
-router.use(protect);
+// All payment routes are admin-only, gated by permissions
+router.use(authenticate);
 
-router.post('/', addPayment);
-router.get('/', getAllPayments);
-router.get('/booking/:bookingId', getPaymentsByBooking);
-router.delete('/:id', deletePayment);
+router.post('/', requirePermission('payments.edit'), addPayment);
+router.get('/', requirePermission('payments.view'), getAllPayments);
+router.get('/booking/:bookingId', requirePermission('payments.view'), getPaymentsByBooking);
+router.delete('/:id', requirePermission('payments.edit'), deletePayment);
 
 module.exports = router;

@@ -1,14 +1,15 @@
 const { prisma } = require('../lib/prisma');
+const { logAction } = require('../utils/auditLogger');
 
 /**
- * @desc    Submit inquiry (Public)
+ * @desc    Submit inquiry (Public / Link attribution)
  * @route   POST /api/inquiries
  * @access  Public
  */
 exports.createInquiry = async (req, res, next) => {
   try {
     const tenantId = req.headers['x-tenant-id'] || 'default';
-    const { phone, tripId } = req.body;
+    const { phone, tripId, sourceBookingLinkId } = req.body;
     
     // Check for duplicates in the last 48 hours
     const duplicate = await prisma.inquiry.findFirst({
@@ -19,6 +20,23 @@ exports.createInquiry = async (req, res, next) => {
         createdAt: { gte: new Date(Date.now() - 48 * 60 * 60 * 1000) }
       }
     });
+
+    // Resolve salesAdminId attribution
+    let salesAdminId = null;
+    if (sourceBookingLinkId) {
+      const link = await prisma.bookingLink.findUnique({
+        where: { id: sourceBookingLinkId }
+      });
+      if (link) {
+        salesAdminId = link.createdByAdminId;
+      }
+    } else if (req.user) {
+      if (req.user.role === 'sales') {
+        salesAdminId = req.user.id;
+      } else if (req.body.salesAdminId) {
+        salesAdminId = req.body.salesAdminId;
+      }
+    }
 
     const inquiry = await prisma.inquiry.create({
       data: {
@@ -32,6 +50,7 @@ exports.createInquiry = async (req, res, next) => {
         source: req.body.source,
         adminNotes: `Source: ${req.body.source || 'Unknown'}`,
         tenantId,
+        salesAdminId,
         count: req.body.count ? parseInt(req.body.count) : undefined
       }
     });
@@ -54,6 +73,11 @@ exports.getInquiries = async (req, res, next) => {
 
     const where = { tenantId };
     if (status) where.status = status;
+
+    // Apply sales constraint
+    if (req.user?.role === 'sales') {
+      where.salesAdminId = req.user.id;
+    }
 
     const inquiries = await prisma.inquiry.findMany({
       where,
@@ -86,29 +110,39 @@ exports.updateInquiryStatus = async (req, res, next) => {
     const tenantId = req.user.tenantId;
     const { status, adminNotes } = req.body;
 
-    const inquiry = await prisma.inquiry.updateMany({
-      where: { id, tenantId },
-      data: { status, adminNotes }
-    });
+    const where = { id, tenantId };
+    if (req.user?.role === 'sales') {
+      where.salesAdminId = req.user.id;
+    }
 
-    if (inquiry.count === 0) {
+    const beforeInquiry = await prisma.inquiry.findFirst({ where });
+    if (!beforeInquiry) {
       return res.status(404).json({ success: false, message: 'Inquiry not found' });
     }
+
+    await prisma.inquiry.updateMany({
+      where,
+      data: { status, adminNotes }
+    });
 
     res.json({ success: true, message: 'Inquiry updated' });
   } catch (error) {
     next(error);
   }
 };
+
 /**
  * @desc    Get single inquiry
  * @route   GET /api/inquiries/:id
  */
 exports.getInquiry = async (req, res, next) => {
   try {
-    const inquiry = await prisma.inquiry.findFirst({
-      where: { id: req.params.id, tenantId: req.user.tenantId }
-    });
+    const where = { id: req.params.id, tenantId: req.user.tenantId };
+    if (req.user?.role === 'sales') {
+      where.salesAdminId = req.user.id;
+    }
+
+    const inquiry = await prisma.inquiry.findFirst({ where });
     if (!inquiry) return res.status(404).json({ success: false, message: 'Inquiry not found' });
     
     const mappedInquiry = {
@@ -128,10 +162,15 @@ exports.getInquiry = async (req, res, next) => {
  */
 exports.deleteInquiry = async (req, res, next) => {
   try {
-    const result = await prisma.inquiry.deleteMany({
-      where: { id: req.params.id, tenantId: req.user.tenantId }
-    });
-    if (result.count === 0) return res.status(404).json({ success: false, message: 'Inquiry not found' });
+    const where = { id: req.params.id, tenantId: req.user.tenantId };
+    if (req.user?.role === 'sales') {
+      where.salesAdminId = req.user.id;
+    }
+
+    const inquiry = await prisma.inquiry.findFirst({ where });
+    if (!inquiry) return res.status(404).json({ success: false, message: 'Inquiry not found' });
+
+    await prisma.inquiry.deleteMany({ where });
     res.json({ success: true, message: 'Inquiry deleted' });
   } catch (error) {
     next(error);

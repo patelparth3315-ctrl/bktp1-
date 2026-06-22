@@ -17,19 +17,19 @@ const validate = (schema) => (req, res, next) => {
 // ── Booking schemas ─────────────────────────────────────────────────
 const createBookingSchema = z.object({
   tripId: z.string().min(1, 'Trip ID is required'),
-  name: z.string().optional(),
-  fullName: z.string().optional(),
-  phone: z.string().optional(),
-  mobile: z.string().optional(),
-  email: z.string().email('Valid email is required').optional().or(z.literal('')),
-  amount: z.number({ coerce: true }).min(0, 'Amount must be non-negative').optional(),
-  totalAmount: z.number({ coerce: true }).min(0, 'Amount must be non-negative').optional(),
-  advancePaid: z.number({ coerce: true }).min(0).optional(),
-  numberOfTravelers: z.number({ coerce: true }).int().min(1).optional(),
-  departureDate: z.string().optional(),
-  pickupCity: z.string().optional(),
-  notes: z.string().optional(),
-  passengers: z.any().optional(),
+  name: z.string().optional().nullable(),
+  fullName: z.string().optional().nullable(),
+  phone: z.string().optional().nullable(),
+  mobile: z.string().optional().nullable(),
+  email: z.string().email('Valid email is required').optional().nullable().or(z.literal('')),
+  amount: z.number({ coerce: true }).min(0, 'Amount must be non-negative').optional().nullable(),
+  totalAmount: z.number({ coerce: true }).min(0, 'Amount must be non-negative').optional().nullable(),
+  advancePaid: z.number({ coerce: true }).min(0).optional().nullable(),
+  numberOfTravelers: z.number({ coerce: true }).int().min(1).optional().nullable(),
+  departureDate: z.string().optional().nullable(),
+  pickupCity: z.string().optional().nullable(),
+  notes: z.string().optional().nullable(),
+  passengers: z.any().optional().nullable(),
 }).refine(data => data.name || data.fullName, {
   message: "Either name or fullName must be provided",
   path: ["name"]
@@ -41,14 +41,14 @@ const createBookingSchema = z.object({
 // ── Inquiry schemas ─────────────────────────────────────────────────
 const createInquirySchema = z.object({
   phone: z.string().min(5, 'Phone is required'),
-  name: z.string().optional(),
-  email: z.string().email().optional().or(z.literal('')),
-  message: z.string().optional(),
-  tripId: z.string().optional(),
-  tripTitle: z.string().optional(),
-  date: z.string().optional(),
-  count: z.number({ coerce: true }).int().min(1).optional(),
-  source: z.string().optional(),
+  name: z.string().optional().nullable(),
+  email: z.string().email().optional().nullable().or(z.literal('')),
+  message: z.string().optional().nullable(),
+  tripId: z.string().optional().nullable(),
+  tripTitle: z.string().optional().nullable(),
+  date: z.string().optional().nullable(),
+  count: z.number({ coerce: true }).int().min(1).optional().nullable(),
+  source: z.string().optional().nullable(),
 });
 
 // ── Blog schemas ────────────────────────────────────────────────────

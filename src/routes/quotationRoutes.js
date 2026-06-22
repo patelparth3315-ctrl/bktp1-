@@ -1,18 +1,24 @@
 const express = require('express');
 const router = express.Router();
 const { prisma } = require('../lib/prisma');
-const { protect } = require('../middleware/auth');
+const { authenticate, requirePermission } = require('../middleware/auth');
 
 // @desc    Get all quotations
 // @route   GET /api/quotations
-router.get('/', protect, async (req, res, next) => {
+router.get('/', authenticate, requirePermission('quotations.view'), async (req, res, next) => {
   try {
+    const where = { tenantId: req.user.tenantId };
+    
+    // Ownership gating for sales role
+    if (req.user?.role === 'sales') {
+      where.salesAdminId = req.user.id;
+    }
+
     const quotations = await prisma.quotation.findMany({
-      where: { tenantId: req.user.tenantId },
+      where,
       orderBy: { createdAt: 'desc' }
     });
     
-    // Merge data field with top-level for frontend convenience
     const formatted = quotations.map(q => ({
       ...(typeof q.data === 'object' ? q.data : {}),
       id: q.id,
@@ -32,27 +38,36 @@ router.get('/', protect, async (req, res, next) => {
 
 // @desc    Get single quotation by ID or Slug
 router.get('/:idOrSlug', async (req, res, next) => {
-  const fs = require('fs');
-  const logPath = require('path').join(__dirname, '../../debug.log');
   const { idOrSlug } = req.params;
   
+  // Publicly readable quotation details (e.g. for sharing URLs)
+  // If authorization header exists, authenticate first to apply potential sales checks
+  if (req.headers.authorization) {
+    return authenticate(req, res, next);
+  }
+  next();
+}, async (req, res, next) => {
+  const { idOrSlug } = req.params;
   try {
-    fs.appendFileSync(logPath, `\n[${new Date().toISOString()}] Fetching Quotation: ${idOrSlug}\n`);
-    
+    const where = {
+      OR: [ { id: idOrSlug }, { slug: idOrSlug }, { title: idOrSlug } ]
+    };
+
     const quotation = await prisma.quotation.findFirst({
-      where: {
-        OR: [ { id: idOrSlug }, { slug: idOrSlug }, { title: idOrSlug } ]
-      }
+      where
     });
     
     if (!quotation) {
-      const all = await prisma.quotation.findMany({ select: { id: true, slug: true, title: true } });
-      fs.appendFileSync(logPath, `❌ Quotation not found: ${idOrSlug}\n`);
-      fs.appendFileSync(logPath, `Existing Slugs: ${JSON.stringify(all.map(x => x.slug || x.id))}\n`);
       return res.status(404).json({ success: false, message: 'Quotation not found' });
     }
 
-    fs.appendFileSync(logPath, `✅ Found Quotation: ${quotation.title}\n`);
+    // Gated check if logged in as admin/sales
+    if (req.user) {
+      if (req.user.role === 'sales' && quotation.salesAdminId !== req.user.id) {
+        return res.status(404).json({ success: false, message: 'Quotation not found' });
+      }
+    }
+
     res.json({ 
       success: true, 
       data: {
@@ -65,14 +80,13 @@ router.get('/:idOrSlug', async (req, res, next) => {
       } 
     });
   } catch (err) {
-    fs.appendFileSync(logPath, `❌ Fetch Error: ${err.message}\n`);
     next(err);
   }
 });
 
 // @desc    Create or Update quotation
 // @route   POST /api/quotations
-router.post('/', protect, async (req, res, next) => {
+router.post('/', authenticate, requirePermission('quotations.create'), async (req, res, next) => {
   try {
     const body = req.body;
     const id = body.id;
@@ -83,19 +97,18 @@ router.post('/', protect, async (req, res, next) => {
     const finalStatus = body.status || 'Draft';
     const finalSlug = body.slug || (finalTitle.toLowerCase().replace(/[^a-z0-9]/g, '-') + '-' + Math.random().toString(36).substring(2, 7));
 
-    const fs = require('fs');
-    const logPath = require('path').join(__dirname, '../../debug.log');
-    
-    fs.appendFileSync(logPath, `\n[${new Date().toISOString()}] Saving Quotation: ${id || 'New'} - ${finalTitle}\n`);
-    fs.appendFileSync(logPath, `Payload: ${JSON.stringify(body, null, 2)}\n`);
-
     let quotation;
-    
-    // Check if we should update or create
-    const existing = id ? await prisma.quotation.findUnique({ where: { id } }) : null;
+    const existing = id ? await prisma.quotation.findFirst({ where: { id, tenantId: req.user.tenantId } }) : null;
 
     if (existing) {
-      fs.appendFileSync(logPath, 'Updating existing record\n');
+      // Validate sales ownership before editing
+      if (req.user?.role === 'sales' && existing.salesAdminId !== req.user.id) {
+        return res.status(404).json({ success: false, message: 'Quotation not found' });
+      }
+      if (req.user?.role === 'sales' && body.salesAdminId !== undefined && body.salesAdminId !== existing.salesAdminId) {
+        return res.status(403).json({ success: false, message: 'Sales users cannot modify quotation ownership' });
+      }
+
       quotation = await prisma.quotation.update({
         where: { id },
         data: {
@@ -108,7 +121,14 @@ router.post('/', protect, async (req, res, next) => {
         }
       });
     } else {
-      fs.appendFileSync(logPath, 'Creating new record\n');
+      // Creation: Resolve salesAdminId
+      let salesAdminId = null;
+      if (req.user?.role === 'sales') {
+        salesAdminId = req.user.id;
+      } else if (body.salesAdminId) {
+        salesAdminId = body.salesAdminId;
+      }
+
       quotation = await prisma.quotation.create({
         data: {
           id: id || undefined, 
@@ -118,6 +138,7 @@ router.post('/', protect, async (req, res, next) => {
           totalAmount: finalAmount,
           status: finalStatus,
           data: body,
+          salesAdminId,
           tenantId: req.user?.tenantId || 'default'
         }
       });
@@ -125,30 +146,27 @@ router.post('/', protect, async (req, res, next) => {
 
     res.json({ success: true, data: quotation });
   } catch (err) {
-    const fs = require('fs');
-    const logPath = require('path').join(__dirname, '../../debug.log');
-    fs.appendFileSync(logPath, `❌ ERROR: ${err.message}\n${err.stack}\n`);
-    
     console.error('❌ Quotation Save Error:', err);
     res.status(500).json({ 
       success: false, 
       message: 'Failed to save quotation', 
-      error: err.message,
-      stack: err.stack,
-      code: err.code 
+      error: err.message
     });
   }
 });
 
 // @desc    Delete quotation
 // @route   DELETE /api/quotations/:id
-router.delete('/:id', protect, async (req, res, next) => {
+router.delete('/:id', authenticate, requirePermission('quotations.edit'), async (req, res, next) => {
   try {
     const { id } = req.params;
     
-    // Check if it exists first to avoid prisma throw
-    const existing = await prisma.quotation.findUnique({ where: { id } });
+    const existing = await prisma.quotation.findFirst({ where: { id, tenantId: req.user.tenantId } });
     if (!existing) {
+      return res.status(404).json({ success: false, message: 'Quotation not found' });
+    }
+
+    if (req.user?.role === 'sales' && existing.salesAdminId !== req.user.id) {
       return res.status(404).json({ success: false, message: 'Quotation not found' });
     }
 
@@ -157,20 +175,23 @@ router.delete('/:id', protect, async (req, res, next) => {
     });
     res.json({ success: true, message: 'Quotation deleted' });
   } catch (err) {
-    console.error('❌ Quotation Delete Error:', err);
-    res.status(500).json({ success: false, message: 'Failed to delete quotation', error: err.message });
+    next(err);
   }
 });
 
 // @desc    Extend quotation validity
 // @route   PATCH /api/quotations/:id/extend
-router.patch('/:id/extend', protect, async (req, res, next) => {
+router.patch('/:id/extend', authenticate, requirePermission('quotations.edit'), async (req, res, next) => {
   try {
     const { hours } = req.body;
     const { id } = req.params;
     
-    const quotation = await prisma.quotation.findUnique({ where: { id } });
+    const quotation = await prisma.quotation.findFirst({ where: { id, tenantId: req.user.tenantId } });
     if (!quotation) return res.status(404).json({ success: false, message: 'Not found' });
+
+    if (req.user?.role === 'sales' && quotation.salesAdminId !== req.user.id) {
+      return res.status(404).json({ success: false, message: 'Not found' });
+    }
 
     const currentData = quotation.data || {};
     const newExpiry = new Date(new Date().getTime() + (hours || 48) * 60 * 60 * 1000);

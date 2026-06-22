@@ -3,10 +3,13 @@ const prisma = new PrismaClient();
 
 async function check() {
   try {
-    const trip = await prisma.trip.findFirst({
-      where: { id: 'MKA2' }
+    const trips = await prisma.trip.findMany({
+      select: { id: true, title: true, status: true, availableDates: true }
     });
-    console.log('Trip MKA2 availableDates:', JSON.stringify(trip.availableDates, null, 2));
+    for (const t of trips) {
+      console.log(`Trip: ${t.title} (${t.status})`);
+      console.log(`  Dates: ${JSON.stringify(t.availableDates)}`);
+    }
   } catch (err) {
     console.error('Error checking database:', err);
   } finally {

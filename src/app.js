@@ -76,11 +76,11 @@ app.use(morgan('dev'));
 // Rate Limiting
 const rateLimit = require('express-rate-limit');
 
-const isTestEnv = process.env.NODE_ENV === 'test';
+const isTestEnv = process.env.NODE_ENV === 'test' || process.env.DISABLE_RATE_LIMIT === 'true';
 
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: isTestEnv ? 9999 : 200,
+  max: isTestEnv ? 99999 : 200,
   message: { error: 'Too many requests, try again later' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -88,7 +88,7 @@ const globalLimiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: isTestEnv ? 9999 : 5,
+  max: isTestEnv ? 99999 : 5,
   message: { error: 'Too many requests, try again later' },
   standardHeaders: true,
   legacyHeaders: false,
