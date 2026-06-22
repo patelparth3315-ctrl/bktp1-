@@ -154,23 +154,23 @@ async function generateInvoicePDF(booking) {
       doc.fontSize(10)
          .font('Helvetica')
          .fillColor(secondaryColor)
-         .text('Subtotal:', 350, totalsTop)
+         .text('Subtotal:', 350, totalsTop, { width: 100 })
          .fillColor(brandColor)
-         .text(`INR ${(booking.totalAmount || 0).toLocaleString('en-IN')}`, 480, totalsTop, { align: 'right' });
+         .text(`INR ${(booking.totalAmount || 0).toLocaleString('en-IN')}`, 450, totalsTop, { width: 90, align: 'right' });
 
       doc.fillColor(secondaryColor)
-         .text('Advance Paid:', 350, totalsTop + 20)
+         .text('Advance Paid:', 350, totalsTop + 20, { width: 100 })
          .fillColor(accentColor)
-         .text(`- INR ${(booking.advancePaid || 0).toLocaleString('en-IN')}`, 480, totalsTop + 20, { align: 'right' });
+         .text(`- INR ${(booking.advancePaid || 0).toLocaleString('en-IN')}`, 450, totalsTop + 20, { width: 90, align: 'right' });
 
       // Grand Total Box
-      doc.rect(340, totalsTop + 40, 210, 30).fill(brandColor);
+      doc.rect(340, totalsTop + 40, 210, 35).fill(brandColor);
       doc.fillColor('#fff')
          .font('Helvetica-Bold')
-         .fontSize(11)
-         .text('BALANCE DUE', 350, totalsTop + 50)
-         .fontSize(13)
-         .text(`INR ${(booking.remainingAmount || 0).toLocaleString('en-IN')}`, 480, totalsTop + 48, { align: 'right' });
+         .fontSize(10)
+         .text('BALANCE DUE', 350, totalsTop + 53, { width: 100 })
+         .fontSize(12)
+         .text(`INR ${(booking.remainingAmount || 0).toLocaleString('en-IN')}`, 450, totalsTop + 52, { width: 90, align: 'right' });
 
       // --- Footer ---
       const pageHeight = doc.page.height;
