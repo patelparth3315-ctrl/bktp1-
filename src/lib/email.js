@@ -111,147 +111,319 @@ const templates = {
   confirmation: (booking) => {
     const trip = booking.tripRef || {};
     const departureDate = booking.departureDate 
-      ? new Date(booking.departureDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })
-      : 'To be updated';
+      ? new Date(booking.departureDate)
+      : null;
+      
+    // Format calendar dates
+    let dayOfWeek = 'TBD';
+    let dayOfMonth = '--';
+    let monthName = 'TBD';
+    let year = '----';
 
-    const content = `
-      <div style="text-align: left;">
-        <p>Dear ${booking.fullName || booking.name},</p>
-        <p>Thank you for booking with YouthCamping ❤️</p>
-        <p>We are pleased to confirm your booking for <strong>${trip.title || booking.tripName || 'your upcoming trip'}</strong>.</p>
-        <p>Your Booking ID is: <strong>${booking.bookingId}</strong><br>
-        Please use this ID for future communication and references.</p>
+    if (departureDate) {
+      dayOfWeek = departureDate.toLocaleDateString('en-US', { weekday: 'short' });
+      dayOfMonth = departureDate.toLocaleDateString('en-US', { day: '2-digit' });
+      monthName = departureDate.toLocaleDateString('en-US', { month: 'short' });
+      year = departureDate.getFullYear().toString();
+    }
 
-        <div class="highlight-box" style="background-color: #f8fafc;">
-          <h2 style="font-size: 16px; margin-top: 0;">🏔️ Trip Details</h2>
-          <div style="display: grid; grid-template-columns: 1fr; gap: 10px;">
-            <div>
-              <div class="label">Trip Name</div>
-              <div class="value">${trip.title || booking.tripName || 'N/A'}</div>
+    // Pricing Calculations
+    const meta = booking.sourceMeta || {};
+    const storedItems = meta.bookingItems || [];
+
+    let basePrice = 0;
+    let gstDiscount = 0;
+    let priceRowsHtml = '';
+
+    const activeItems = storedItems.filter((item) => item.qty > 0 || item.rate < 0);
+    const baseItems = activeItems.filter((item) => !(item.name.toLowerCase().includes("discount") || item.rate < 0));
+    const discountItems = activeItems.filter((item) => item.name.toLowerCase().includes("discount") || item.rate < 0);
+
+    basePrice = baseItems.reduce((acc, item) => acc + (item.rate * item.qty), 0);
+    gstDiscount = discountItems.reduce((acc, item) => acc + Math.abs(item.rate * item.qty), 0);
+
+    if (baseItems.length > 0) {
+      baseItems.forEach(item => {
+        priceRowsHtml += `
+          <tr style="border-bottom: 1px solid #e2e8f0; font-size: 13px;">
+            <td style="padding: 12px 10px; color: #334155; text-align: left; vertical-align: top;">
+              <div style="font-weight: 700;">${item.name}</div>
+            </td>
+            <td style="padding: 12px 10px; color: #64748b; text-align: center; vertical-align: top;">
+              ${item.qty} &times; ${Number(item.rate).toLocaleString('en-IN')}
+            </td>
+            <td style="padding: 12px 10px; color: #334155; font-weight: 700; text-align: right; vertical-align: top; white-space: nowrap;">
+              ₹ ${Number(item.rate * item.qty).toLocaleString('en-IN')}
+            </td>
+          </tr>
+        `;
+      });
+    } else {
+      // Fallback
+      priceRowsHtml += `
+        <tr style="border-bottom: 1px solid #e2e8f0; font-size: 13px;">
+          <td style="padding: 12px 10px; color: #334155; text-align: left; vertical-align: top; font-weight: 700;">
+            Package Cost
+          </td>
+          <td style="padding: 12px 10px; color: #64748b; text-align: center; vertical-align: top;">
+            1
+          </td>
+          <td style="padding: 12px 10px; color: #334155; font-weight: 700; text-align: right; vertical-align: top; white-space: nowrap;">
+            ₹ ${Number(booking.baseAmount || booking.totalAmount).toLocaleString('en-IN')}
+          </td>
+        </tr>
+      `;
+      basePrice = booking.baseAmount || booking.totalAmount;
+    }
+
+    if (gstDiscount > 0) {
+      priceRowsHtml += `
+        <tr style="border-bottom: 1px solid #e2e8f0; font-size: 13px;">
+          <td style="padding: 12px 10px; color: #dc2626; text-align: left; font-weight: 700;" colspan="2">
+            GST DISCOUNT
+          </td>
+          <td style="padding: 12px 10px; color: #dc2626; font-weight: 700; text-align: right; white-space: nowrap;">
+            - ₹ ${Number(gstDiscount).toLocaleString('en-IN')}
+          </td>
+        </tr>
+      `;
+    }
+
+    const gstRate = 0.05;
+    const calculatedGst = Math.round((basePrice - gstDiscount) * gstRate);
+    const totalWithGst = basePrice - gstDiscount + calculatedGst;
+
+    priceRowsHtml += `
+      <tr style="border-bottom: 1px solid #e2e8f0; font-size: 13px;">
+        <td style="padding: 12px 10px; color: #334155; text-align: left; font-weight: 700;" colspan="2">
+          GST (Reg no. 24CRFPP3172G1ZT) @ 5%
+        </td>
+        <td style="padding: 12px 10px; color: #334155; font-weight: 700; text-align: right; white-space: nowrap;">
+          ₹ ${Number(calculatedGst).toLocaleString('en-IN')}
+        </td>
+      </tr>
+      <tr style="background-color: #f1f5f9; font-size: 14px;">
+        <td style="padding: 12px 10px; color: #0f172a; text-align: left; font-weight: 900;" colspan="2">
+          Total
+        </td>
+        <td style="padding: 12px 10px; color: #0f172a; font-weight: 900; text-align: right; white-space: nowrap;">
+          ₹ ${Number(totalWithGst).toLocaleString('en-IN')}
+        </td>
+      </tr>
+    `;
+
+    // Highlights bullets html
+    let highlightsHtml = '';
+    const highlights = Array.isArray(trip.highlights) 
+      ? trip.highlights 
+      : (trip.highlights && typeof trip.highlights === 'string' ? JSON.parse(trip.highlights) : []);
+
+    if (highlights.length > 0) {
+      highlights.forEach(h => {
+        highlightsHtml += `<li style="margin-bottom: 8px; color: #475569;">${h}</li>`;
+      });
+    } else {
+      highlightsHtml = `
+        <li style="margin-bottom: 8px; color: #475569;">Visit remote villages, explore ancient monasteries and local culture.</li>
+        <li style="margin-bottom: 8px; color: #475569;">Experience local cuisine, sights, and hidden gems.</li>
+        <li style="margin-bottom: 8px; color: #475569;">Enjoy a beautifully managed camping experience.</li>
+      `;
+    }
+
+    const logoUrl = 'https://youthcamping.online/logo.png';
+    const heroImage = trip.heroImage || 'https://images.unsplash.com/photo-1506744038136-46273834b3fb';
+
+    const emailContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Booking Confirmation</title>
+</head>
+<body style="font-family: Arial, sans-serif; background-color: #cccccc; margin: 0; padding: 20px 0;">
+  <div style="max-width: 650px; margin: 0 auto; background-color: #f5f5f5; border: 1px solid #d1d5db; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
+    
+    <!-- Top Header -->
+    <table style="width: 100%; background-color: #cccccc; padding: 15px 20px; border-bottom: 1px solid #b8b8b8; border-collapse: collapse;">
+      <tr>
+        <td style="vertical-align: middle;">
+          <img src="${logoUrl}" alt="YouthCamping" style="height: 35px; width: auto; display: block;" />
+        </td>
+        <td style="text-align: right; vertical-align: middle; font-size: 11px; color: #ffffff; font-weight: 700; width: 60%; line-height: 1.4;">
+          Your booking for ${trip.title || booking.tripName} | Booking Id: ${booking.bookingId} has been confirmed.
+        </td>
+      </tr>
+    </table>
+
+    <!-- Hero Image -->
+    <div style="width: 100%; height: auto; overflow: hidden;">
+      <img src="${heroImage}" alt="Trip Cover" style="width: 100%; height: auto; display: block;" />
+    </div>
+
+    <!-- Main Body Area -->
+    <div style="padding: 25px;">
+      
+      <!-- Two Column Section -->
+      <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px;">
+        <tr>
+          <!-- Left Column -->
+          <td style="width: 65%; vertical-align: top; padding-right: 20px;">
+            <h1 style="font-size: 26px; font-weight: 900; color: #475569; margin: 0 0 10px 0;">Booking Confirmation</h1>
+            <div style="font-size: 16px; margin-bottom: 8px;">
+              <a href="https://youthcamping.online/trips/${trip.slug || ''}" style="color: #3b82f6; text-decoration: underline; font-weight: 700;">${trip.title || booking.tripName}</a>
             </div>
-            <div style="display: flex; gap: 40px;">
-              <div>
-                <div class="label">📍 Departure</div>
-                <div class="value">${trip.departureCity || booking.boardingCity || 'N/A'}</div>
+            <div style="font-size: 13px; color: #64748b; margin-bottom: 25px;">
+              <img src="https://cdn-icons-png.flaticon.com/16/684/684908.png" style="width: 12px; height: 12px; vertical-align: middle; margin-right: 4px;" />
+              ${booking.pickupCity || trip.location || 'Gujarat, India'}
+            </div>
+
+            <p style="font-size: 13px; margin: 0 0 15px 0; color: #1e293b;">Dear <strong>${booking.fullName || booking.name}</strong>,</p>
+            <p style="font-size: 13px; line-height: 1.6; color: #475569; margin: 0;">
+              Thank you for booking with <strong>YouthCamping</strong>. It is our pleasure to confirm your booking. Your Booking Id is <strong>${booking.bookingId}</strong>, please use this ID for further references or communication. The booking details are given below:
+            </p>
+          </td>
+
+          <!-- Right Column (Sidebar Calendar & Info) -->
+          <td style="width: 35%; vertical-align: top; min-width: 130px;">
+            <!-- Calendar Block -->
+            <div style="width: 110px; margin: 0 0 20px auto; border: 1px solid #d1d5db; border-radius: 8px; overflow: hidden; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.05); background-color: #ffffff;">
+              <div style="background-color: #dc2626; color: #ffffff; font-size: 11px; font-weight: 700; padding: 4px 0; text-transform: uppercase; letter-spacing: 0.5px;">
+                ${dayOfWeek}
               </div>
-              <div>
-                <div class="label">📅 Departure Date</div>
-                <div class="value">${departureDate}</div>
+              <div style="padding: 12px 0;">
+                <div style="font-size: 26px; font-weight: 800; color: #1e293b; line-height: 1;">
+                  ${dayOfMonth}
+                </div>
+                <div style="font-size: 11px; font-weight: 700; color: #64748b; margin-top: 2px; text-transform: uppercase;">
+                  ${monthName}
+                </div>
+              </div>
+              <div style="background-color: #dc2626; color: #ffffff; font-size: 11px; font-weight: 700; padding: 3px 0;">
+                ${year}
               </div>
             </div>
-          </div>
+
+            <!-- Sidebar Text Info -->
+            <div style="text-align: left; font-size: 11px; padding-left: 10px; line-height: 1.5;">
+              <div style="font-weight: 800; color: #64748b; margin-bottom: 2px; text-transform: uppercase; letter-spacing: 0.5px;">Trip</div>
+              <div style="font-weight: 700; color: #1e293b; margin-bottom: 12px;">${trip.title || booking.tripName}</div>
+              
+              <div style="font-weight: 800; color: #64748b; margin-bottom: 2px; text-transform: uppercase; letter-spacing: 0.5px;">Contact Information</div>
+              <div style="font-weight: 700; color: #1e293b;">${booking.fullName || booking.name}</div>
+              <div style="margin-top: 1px;"><a href="mailto:${booking.email}" style="color: #3b82f6; text-decoration: underline;">${booking.email}</a></div>
+              <div style="margin-top: 1px; color: #1e293b;">+91${booking.mobile || booking.phone}</div>
+            </div>
+          </td>
+        </tr>
+      </table>
+
+      <!-- Highlights Section -->
+      <div style="margin-bottom: 30px;">
+        <div style="font-size: 15px; font-weight: 800; color: #1e293b; margin-bottom: 10px;">
+          <img src="https://cdn-icons-png.flaticon.com/24/159/159604.png" style="width: 18px; height: 18px; vertical-align: middle; margin-right: 6px;" />
+          <span style="vertical-align: middle;">${trip.title || booking.tripName}</span>
         </div>
-
-        <h2 style="font-size: 16px;">✨ Trip Highlights</h2>
-        <ul style="padding-left: 20px; color: #475569; font-size: 14px;">
-          ${Array.isArray(trip.highlights) && trip.highlights.length > 0 
-            ? trip.highlights.map(h => `<li>${h}</li>`).join('')
-            : `
-            <li>Highlight 1</li>
-            <li>Highlight 2</li>
-            <li>Highlight 3</li>
-            <li>Highlight 4</li>
-            `
-          }
-          <li>Campfire & Music Night 🔥</li>
-          <li>Adventure Activities 🚵</li>
+        <ul style="margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.6; color: #475569;">
+          ${highlightsHtml}
         </ul>
+      </div>
 
-        <div class="divider"></div>
-
-        <h2 style="font-size: 16px;">👤 Contact Information</h2>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
-          <div>
-            <div class="label">Name</div>
-            <div class="value">${booking.fullName || booking.name}</div>
-          </div>
-          <div>
-            <div class="label">Email</div>
-            <div class="value">${booking.email || 'N/A'}</div>
-          </div>
-          <div>
-            <div class="label">Phone</div>
-            <div class="value">+91 ${booking.mobile || booking.phone || 'N/A'}</div>
-          </div>
+      <!-- Address Section -->
+      <div style="margin-bottom: 35px;">
+        <div style="font-size: 15px; font-weight: 800; color: #1e293b; margin-bottom: 6px;">
+          <img src="https://cdn-icons-png.flaticon.com/24/684/684908.png" style="width: 16px; height: 16px; vertical-align: middle; margin-right: 6px;" />
+          <span style="vertical-align: middle;">Address</span>
         </div>
-
-        <div class="divider"></div>
-
-        <h2 style="font-size: 16px;">💰 Pricing Details</h2>
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px;">
-          <tr style="border-bottom: 1px solid #e2e8f0;">
-            <th style="text-align: left; padding: 8px 0; color: #64748b;">Description</th>
-            <th style="text-align: right; padding: 8px 0; color: #64748b;">Amount</th>
-          </tr>
-          <tr>
-            <td style="padding: 8px 0;">Package Cost</td>
-            <td style="text-align: right; padding: 8px 0; font-weight: 600;">₹ ${ (booking.baseAmount || booking.totalAmount).toLocaleString('en-IN') }</td>
-          </tr>
-          <tr>
-            <td style="padding: 8px 0;">GST</td>
-            <td style="text-align: right; padding: 8px 0; font-weight: 600;">₹ ${ (booking.gstAmount || 0).toLocaleString('en-IN') }</td>
-          </tr>
-          <tr>
-            <td style="padding: 8px 0;">Discount</td>
-            <td style="text-align: right; padding: 8px 0; font-weight: 600; color: #059669;">- ₹ 0</td>
-          </tr>
-          <tr style="border-top: 2px solid #e2e8f0;">
-            <td style="padding: 10px 0; font-weight: 900;">Total</td>
-            <td style="text-align: right; padding: 10px 0; font-weight: 900; font-size: 16px;">₹ ${ booking.totalAmount.toLocaleString('en-IN') }</td>
-          </tr>
-        </table>
-
-        <h2 style="font-size: 16px;">💳 Payment Details</h2>
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 10px; font-size: 14px;">
-          <tr>
-            <td style="padding: 5px 0; color: #64748b;">Paid Amount</td>
-            <td style="text-align: right; padding: 5px 0; font-weight: 700; color: #059669;">₹ ${ booking.advancePaid.toLocaleString('en-IN') }</td>
-          </tr>
-          <tr>
-            <td style="padding: 5px 0; color: #64748b;">Remaining Amount</td>
-            <td style="text-align: right; padding: 5px 0; font-weight: 700; color: #dc2626;">₹ ${ booking.remainingAmount.toLocaleString('en-IN') }</td>
-          </tr>
-        </table>
-        <p style="font-size: 12px; color: #f97316; font-weight: 700;">⚠️ Please complete the remaining payment before trip departure.</p>
-
-        <div class="divider"></div>
-
-        <h2 style="font-size: 16px;">📌 Important Notes</h2>
-        <ul style="padding-left: 20px; color: #64748b; font-size: 13px; line-height: 1.8;">
-          <li>Food during travel is not included.</li>
-          <li>Separate accommodations for boys & girls.</li>
-          <li>Carry valid ID proof during travel.</li>
-          <li>Weather & road conditions may affect itinerary.</li>
-          <li>Any damage to campsite/hotel property will be chargeable.</li>
-        </ul>
-
-        <h2 style="font-size: 16px;">❌ Cancellation Policy</h2>
-        <ul style="padding-left: 20px; color: #64748b; font-size: 13px; line-height: 1.8;">
-          <li>Before 45 Days – 80% Refund</li>
-          <li>Before 30 Days – 50% Refund</li>
-          <li>Before 15 Days – 25% Refund</li>
-          <li>Within 15 Days – No Refund</li>
-        </ul>
-
-        <div class="divider"></div>
-
-        <p style="text-align: center; font-weight: 700;">Thank you for choosing YouthCamping ❤️</p>
-        <p style="text-align: center; color: #475569; font-size: 14px;">We look forward to traveling with you and creating unforgettable memories together 🌍✨</p>
-
-        <div style="margin-top: 30px; padding: 20px; background: #f8fafc; border-radius: 12px; text-align: center;">
-          <p style="margin: 0; font-size: 14px; font-weight: 700;">Contact Us</p>
-          <p style="margin: 5px 0; font-size: 13px; color: #3b82f6;">📧 youthcampingmedia@gmail.com</p>
-          <p style="margin: 5px 0; font-size: 13px; color: #3b82f6;">📞 +91 9924246267</p>
+        <div style="font-size: 13px; color: #475569; padding-left: 25px; line-height: 1.5;">
+          ${booking.pickupCity ? `${booking.pickupCity} Pickup Point` : 'Sabarmati Railway Station Overpass, Ram Nagar, Sabarmati, Ahmedabad, Gujarat, India'}
         </div>
-
-        <div style="text-align: center; margin-top: 25px;">
-          <a href="${process.env.FRONTEND_URL}/my-bookings" class="button">View My Booking</a>
+        <div style="margin-top: 10px; padding-left: 25px;">
+          <a href="https://youthcamping.online/trips/${trip.slug || ''}" style="color: #3b82f6; text-decoration: underline; font-weight: 700; font-size: 12px;">See Detailed Itinerary</a>
         </div>
       </div>
+
+      <!-- Pricing Details Table -->
+      <div style="margin-bottom: 35px;">
+        <div style="font-size: 15px; font-weight: 800; color: #1e293b; margin-bottom: 10px;">
+          <img src="https://cdn-icons-png.flaticon.com/24/495/495591.png" style="width: 16px; height: 16px; vertical-align: middle; margin-right: 6px;" />
+          <span style="vertical-align: middle; text-transform: uppercase;">Pricing Details :</span>
+        </div>
+        <table style="width: 100%; border-collapse: collapse; border: 1px solid #e2e8f0; background-color: #ffffff;">
+          <thead>
+            <tr style="background-color: #2b9b91; color: #ffffff; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;">
+              <th style="padding: 10px; text-align: left; font-weight: 800; width: 50%;">Description</th>
+              <th style="padding: 10px; text-align: center; font-weight: 800; width: 25%;">Qty / Rate</th>
+              <th style="padding: 10px; text-align: right; font-weight: 800; width: 25%;">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${priceRowsHtml}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Payment Details Table -->
+      <div style="margin-bottom: 25px;">
+        <div style="font-size: 15px; font-weight: 800; color: #1e293b; margin-bottom: 10px;">
+          <img src="https://cdn-icons-png.flaticon.com/24/2984/2984920.png" style="width: 16px; height: 16px; vertical-align: middle; margin-right: 6px;" />
+          <span style="vertical-align: middle; text-transform: uppercase;">Payment Details :</span>
+        </div>
+        <table style="width: 100%; border-collapse: collapse; border: 1px solid #e2e8f0; background-color: #ffffff; margin-bottom: 15px;">
+          <thead>
+            <tr style="background-color: #2b9b91; color: #ffffff; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;">
+              <th style="padding: 10px; text-align: left; font-weight: 800; width: 75%;">Description</th>
+              <th style="padding: 10px; text-align: right; font-weight: 800; width: 25%;">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom: 1px solid #e2e8f0; font-size: 13px;">
+              <td style="padding: 12px 10px; color: #334155; text-align: left; font-weight: 700;">
+                Payment made by ${booking.paymentMode || 'Unknown'}
+              </td>
+              <td style="padding: 12px 10px; color: #334155; font-weight: 700; text-align: right; white-space: nowrap;">
+                ₹ ${Number(booking.advancePaid).toLocaleString('en-IN')}
+              </td>
+            </tr>
+            <tr style="background-color: #f1f5f9; font-size: 14px;">
+              <td style="padding: 12px 10px; color: #0f172a; text-align: left; font-weight: 900;">
+                Total
+              </td>
+              <td style="padding: 12px 10px; color: #0f172a; font-weight: 900; text-align: right; white-space: nowrap;">
+                ₹ ${Number(booking.advancePaid).toLocaleString('en-IN')}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- Balance Notice -->
+        <p style="font-size: 12px; color: #dc2626; font-weight: 700; margin: 0 0 8px 0; line-height: 1.4;">
+          Please note: You have balance payment of ₹ ${Number(booking.remainingAmount).toLocaleString('en-IN')}, please make the payment as per the booking.
+        </p>
+        <p style="font-size: 11px; color: #64748b; margin: 0;">
+          Advance booking amount is non-refundable. <a href="https://youthcamping.online/terms" style="color: #3b82f6; text-decoration: underline;">Terms and Conditions</a>
+        </p>
+      </div>
+
+      <!-- Divider -->
+      <div style="height: 1px; background-color: #d1d5db; margin: 25px 0;"></div>
+
+      <!-- Footer contact info -->
+      <div style="text-align: center; font-size: 11px; color: #3b82f6; font-weight: bold;">
+        <a href="mailto:youthcampingmedia@gmail.com" style="color: #3b82f6; text-decoration: none;">youthcampingmedia@gmail.com</a>
+        <span style="color: #64748b; margin: 0 10px; font-weight: normal;">|</span>
+        Phone: +919924246267
+      </div>
+
+    </div>
+  </div>
+</body>
+</html>
     `;
+
     return {
       subject: `Booking Confirmation – ${trip.title || booking.tripName} | Booking ID: ${booking.bookingId}`,
-      html: getBaseTemplate(content, `Your booking for ${trip.title || booking.tripName} is confirmed!`),
+      html: emailContent
     };
   },
 
